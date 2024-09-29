@@ -165,8 +165,16 @@ int currentPos = 0;
 char allNameParts[MAX_NAME_PARTS][14] = {0};
 int namePartsCount = 0;
 
+// Add these global pointers
+FullDirectoryEntry *fullEntry = NULL;
+size_t *clusterCheckArray = NULL;
+int *directoryNumbers = NULL;
+
+// Add these global variables to keep track of array sizes
+size_t fullEntrySize = 0;
+size_t clusterCheckArraySize = 0;
+
 // Global array to hold decoded directory entries and their count
-FullDirectoryEntry fullEntry[1000];
 size_t numRootDirectoryEntries = 0;
 
 // Function to decode the details of a directory
@@ -309,6 +317,18 @@ void processDirectoryEntries(int openedFile, off_t rootDirStart, size_t numEntri
     else if (entry.DIR_Name[0] == 0xE5)
     {
       continue;
+    }
+
+    // Inside the loop where entries are processed:
+    if (numRootDirectoryEntries >= fullEntrySize)
+    {
+      fullEntrySize = fullEntrySize == 0 ? 1000 : fullEntrySize * 2;
+      fullEntry = realloc(fullEntry, fullEntrySize * sizeof(FullDirectoryEntry));
+      if (fullEntry == NULL)
+      {
+        perror("Failed to allocate memory for fullEntry");
+        exit(EXIT_FAILURE);
+      }
     }
 
     // Pass the entry to be decoded
@@ -462,13 +482,6 @@ void closeFile(File *file)
 // Temporary integer to hold current directory index
 int newDirectoryIndex = 0;
 
-// Global array to hold existing cluster locations to prevent overlapping
-size_t clusterCheckArray[100];
-int maxClusterCheckNumber = 100;
-
-// Global array to hold existing directory locations to prevent overlapping
-int directoryNumbers[100];
-
 // Function to find a file/directory in the file system
 FullDirectoryEntry *findDirectoryEntryInDirectory(int openedFile, BootSector *bootSector, uint16_t *fatEntries, off_t dataAreaStart, FullDirectoryEntry *parentDirectory, int *currentDirectoryIndex, const char *name)
 {
@@ -493,9 +506,22 @@ FullDirectoryEntry *findDirectoryEntryInDirectory(int openedFile, BootSector *bo
         }
         else
         {
+          // Replace the fixed-size array checks with dynamic allocation
+          if (clusterCheckArraySize == 0)
+          {
+            clusterCheckArraySize = 100; // Initial size
+            clusterCheckArray = malloc(clusterCheckArraySize * sizeof(size_t));
+            directoryNumbers = malloc(clusterCheckArraySize * sizeof(int));
+            if (clusterCheckArray == NULL || directoryNumbers == NULL)
+            {
+              perror("Failed to allocate memory for cluster arrays");
+              exit(EXIT_FAILURE);
+            }
+          }
+
           // Check if clusterValue already exists in clusterCheckArray
           int existingIndex = -1;
-          for (int i = 0; i < maxClusterCheckNumber; i++)
+          for (size_t i = 0; i < clusterCheckArraySize; i++)
           {
             if (clusterCheckArray[i] == clusterValue)
             {
@@ -512,10 +538,23 @@ FullDirectoryEntry *findDirectoryEntryInDirectory(int openedFile, BootSector *bo
           else
           {
             // If not, add the current clusterValue and newDirectoryIndex to the arrays
-            for (int i = 0; i < maxClusterCheckNumber; i++)
+            size_t i;
+            for (i = 0; i < clusterCheckArraySize; i++)
             {
               if (clusterCheckArray[i] == 0)
               {
+                // Check if we need to expand the arrays
+                if (i == clusterCheckArraySize - 1)
+                {
+                  clusterCheckArraySize *= 2;
+                  clusterCheckArray = realloc(clusterCheckArray, clusterCheckArraySize * sizeof(size_t));
+                  directoryNumbers = realloc(directoryNumbers, clusterCheckArraySize * sizeof(int));
+                  if (clusterCheckArray == NULL || directoryNumbers == NULL)
+                  {
+                    perror("Failed to reallocate memory for cluster arrays");
+                    exit(EXIT_FAILURE);
+                  }
+                }
                 directoryNumbers[i] = newDirectoryIndex;
                 clusterCheckArray[i] = clusterValue;
 
@@ -715,7 +754,19 @@ int main(int argc, char *argv[])
 
   off_t dataAreaStart = (bootSector.BPB_RsvdSecCnt + bootSector.BPB_NumFATs * bootSector.BPB_FATSz16 + (bootSector.BPB_RootEntCnt * sizeof(DirectoryEntry) + bootSector.BPB_BytsPerSec - 1) / bootSector.BPB_BytsPerSec) * bootSector.BPB_BytsPerSec;
 
-  // const char *newFilePath = "/man/man2/../../man/./././../man/man2/../../sessions.txt";
+  // Print the root directory contents
+  printf("\nRoot Directory Contents:\n");
+  printf(headerFormat, "First Cluster", "Last Modified Time", "Last Modified Date", "Attributes", "Length", "FileName");
+  printf("--------------------------------------------------");
+  printf("----------------------------------------------------\n");
+  for (size_t i = 0; i < numRootDirectoryEntries; i++)
+  {
+    if (fullEntry[i].DIR_Name[0] != 0 && fullEntry[i].DIR_Name[0] != 0xE5)
+    {
+      printFile(&fullEntry[i]);
+    }
+  }
+  printf("\n");
 
   // Taking in user input for file path
   char newFilePath[256]; // Adjust the size based on your requirements
